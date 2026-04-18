@@ -5,93 +5,93 @@
 -- Description:
 --   This peripheral provides SCOMP with simultaneous access to all 8 analog
 --   input channels. The peripheral continuously cycles through all 8 channels
---   in the background via SPI, storing each result in a dedicated register.
+--   in the background via 'SPI', storing each result in a dedicated register.
 --   The SCOMP programmer reads any channel instantly by doing IN 0xC0 through
---   IN 0xC7 — no channel select step is needed, and no polling or waiting
+--   IN 0xC7. No channel select is needed, and no polling or waiting
 --   is ever required.
---
--- I/O Map:
---   IN 0xC0 : 12-bit result for channel 0. Bits [15:12] always 0.
---   IN 0xC1 : 12-bit result for channel 1. Bits [15:12] always 0.
---   IN 0xC2 : 12-bit result for channel 2. Bits [15:12] always 0.
---   IN 0xC3 : 12-bit result for channel 3. Bits [15:12] always 0.
---   IN 0xC4 : 12-bit result for channel 4. Bits [15:12] always 0.
---   IN 0xC5 : 12-bit result for channel 5. Bits [15:12] always 0.
---   IN 0xC6 : 12-bit result for channel 6. Bits [15:12] always 0.
---   IN 0xC7 : 12-bit result for channel 7. Bits [15:12] always 0.
---
---   All addresses are read-only. Writing to any address has no effect.
---   Result range: 0x000 (minimum voltage) to 0xFFF (maximum voltage), ~1mV/LSB
 
+-- The following libraries are just the standard imports
+-- Importantly, the lpm library gives us the required bus driver
 library ieee;
 library lpm;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 use lpm.lpm_components.all;
 
+-- Overarching face of peripheral:
+-- inputs speak SCOMP language
+-- outputs speak SPI chip language
+-- NOTE: IO_Data is inout since it carries data both ways depending on R/W
 entity ADC_PERIPHERAL is
     port(
-        CLOCK      : in    std_logic;
-        RESETN     : in    std_logic;
+        CLOCK : in std_logic;
+        RESETN : in std_logic;
         -- SCOMP I/O bus
-        IO_ADDR    : in    std_logic_vector(10 downto 0);
-        IO_DATA    : inout std_logic_vector(15 downto 0);
-        IO_READ    : in    std_logic;
-        IO_WRITE   : in    std_logic;
+        IO_ADDR : in std_logic_vector(10 downto 0);
+        IO_DATA : inout std_logic_vector(15 downto 0);
+        IO_READ : in std_logic;
+        IO_WRITE : in std_logic;
         -- LTC2308 SPI physical pins
-        ADC_CONVST : out   std_logic;
-        ADC_SCK    : out   std_logic;
-        ADC_SDI    : out   std_logic;
-        ADC_SDO    : in    std_logic
+        ADC_CONVST : out std_logic;
+        ADC_SCK : out std_logic;
+        ADC_SDI : out std_logic;
+        ADC_SDO : in std_logic
     );
 end entity ADC_PERIPHERAL;
 
 
 architecture internals of ADC_PERIPHERAL is
 
-    -- Forward declaration of the SPI controller component.
-    -- Full implementation lives in LTC2308_ctrl.vhd.
+    -- This is a forward declaration of a separate VHDL called LTC...
+    -- Like a class declaration in OOP, just declaring that such an entity exists
     component LTC2308_ctrl is
         generic (CLK_DIV : integer := 1);
         port (
-            clk      : in  std_logic;
-            nrst     : in  std_logic;
-            start    : in  std_logic;
-            tx_data  : in  std_logic_vector(11 downto 0);
-            rx_data  : out std_logic_vector(11 downto 0);
-            busy     : out std_logic;
-            sclk     : out std_logic;
-            conv     : out std_logic;
-            mosi     : out std_logic;
-            miso     : in  std_logic
+            clk : in std_logic;
+            nrst : in std_logic;
+            start : in std_logic;
+            tx_data : in std_logic_vector(11 downto 0);
+            rx_data : out std_logic_vector(11 downto 0);
+            busy : out std_logic;
+            sclk : out std_logic;
+            conv : out std_logic;
+            mosi : out std_logic;
+            miso : in std_logic
         );
     end component;
 
-    -- Array type: one 12-bit result register per channel
+    -- An array of 8 twelve-bit registers
+    -- One dedicated result register per channel
     type result_array_t is array (0 to 7) of std_logic_vector(11 downto 0);
+    signal ch_results : result_array_t;
 
-    -- Stores the most recent conversion result for each channel
-    signal ch_results  : result_array_t;
+    -- Cycles ALL CHANNELS CONT. 
+    -- NOTE: Replaced old channel_reg
+    -- This runs automatically, always sampling
+    signal ch_counter : integer range 0 to 7;
 
-    -- Cycles 0->1->2->...->7->0, telling the SPI controller which channel to sample next
-    signal ch_counter  : integer range 0 to 7;
-
-    -- Signals going to/from LTC2308_ctrl
+    -- These are internal wires connecting these files to the LTC
+    -- txdata carries the congif. word in
+    -- rxdata carries ADC result back
+    -- busysig tells us if a conversion is in progress
+    -- startsig triggers a new conversion
     signal tx_data_sig : std_logic_vector(11 downto 0);
     signal rx_data_sig : std_logic_vector(11 downto 0);
-    signal busy_sig    : std_logic;
-    signal start_sig   : std_logic;
+    signal busy_sig : std_logic;
+    signal start_sig : std_logic;
 
-    -- One-cycle delayed copy of busy, used to detect the falling edge
-    signal busy_prev   : std_logic;
+    -- NOTE: A once cycle delayed copy of busySig
+    -- we can compare the two and detect the exact moment busy falls from 1 to 0
+    -- this tells us a conversion just finished
+    signal busy_prev : std_logic;
 
-    -- Counter for periodic start pulses: 250 cycles = 25us at 10MHz
-    signal start_cnt   : integer range 0 to 249;
+    -- Counts from 0 to 249 repeatedly to generate periodic conversion
+    signal start_cnt : integer range 0 to 249;
 
-    -- Bus driver enable
-    signal io_en       : std_logic;
+    -- Enable the bus driver when SCOMP is reading
+    signal io_en : std_logic;
 
-    -- Result selected from ch_results based on the low 3 bits of IO_ADDR
+    -- Holds channel result when the address mux is selected
     signal selected_result : std_logic_vector(11 downto 0);
 
 begin
