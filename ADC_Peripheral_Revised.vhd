@@ -96,19 +96,12 @@ architecture internals of ADC_PERIPHERAL is
 
 begin
 
-    ---------------------------------------------------------------------------
-    -- Build the 12-bit SPI config word from ch_counter.
-    --
-    -- LTC2308 DIN word (6 config bits + 6 padding zeros):
-    --   Bit 5: S/D = 1  (single-ended, not differential)
-    --   Bit 4: O/S = channel MSB
-    --   Bit 3: S1  = channel middle bit
-    --   Bit 2: S0  = channel LSB
-    --   Bit 1: UNI = 1  (unipolar: 0 to Vref)
-    --   Bit 0: SLP = 0  (no sleep mode)
-    --
-    -- conv_std_logic_vector converts ch_counter integer to a 3-bit std_logic_vector
-    ---------------------------------------------------------------------------
+    -- builds the 12 bit SPI config. word that the ADC expects
+    -- first one is single ended mode
+    -- next 3 bits are channel number (7 - ch) corrects for channel mapping error discovered during tests
+    -- then, the one is for unipolar
+    -- 0 is for no sleep mode
+    -- finally, six zeroes for padding
 tx_data_sig <= '1'
              & std_logic_vector(to_unsigned(7 - ch_counter, 3))(2)
              & std_logic_vector(to_unsigned(7 - ch_counter, 3))(1)
@@ -117,31 +110,28 @@ tx_data_sig <= '1'
              & '0'
              & "000000";
 
-    ---------------------------------------------------------------------------
-    -- Instantiate the SPI controller.
-    -- CLK_DIV=1: SCK = 10MHz / 2 = 5MHz (max allowed: 40MHz)
-    ---------------------------------------------------------------------------
+    -- creates a physical instantiation of LTC and wires it up
+    -- sends generic CLK_DIV a value of ONE
     adc_ctrl : LTC2308_ctrl
         generic map (CLK_DIV => 1)
         port map(
-            clk     => CLOCK,
-            nrst    => RESETN,
-            start   => start_sig,
+            clk => CLOCK,
+            nrst => RESETN,
+            start => start_sig,
             tx_data => tx_data_sig,
             rx_data => rx_data_sig,
-            busy    => busy_sig,
-            sclk    => ADC_SCK,
-            conv    => ADC_CONVST,
-            mosi    => ADC_SDI,
-            miso    => ADC_SDO
+            busy => busy_sig,
+            sclk => ADC_SCK,
+            conv => ADC_CONVST,
+            mosi => ADC_SDI,
+            miso => ADC_SDO
         );
 
-    ---------------------------------------------------------------------------
-    -- Periodic Start Pulse Generator
-    --
-    -- Fires a one-cycle start='1' pulse every 250 clock cycles (25us at 10MHz).
-    -- This keeps conversions running automatically without any SCOMP involvement.
-    ---------------------------------------------------------------------------
+    -- this is the start pulse generator
+    -- counts from 0 to 249 on every clock edge
+    -- then, fires a one-cycle start_dig = '1' pulse
+    -- new conversion every 25 microseconds
+    -- makes it so ADC samples all 8 channels cont.
     process(CLOCK, RESETN)
     begin
         if RESETN = '0' then
@@ -158,17 +148,10 @@ tx_data_sig <= '1'
         end if;
     end process;
 
-    ---------------------------------------------------------------------------
-    -- Channel Rotation and Result Latching
-    --
-    -- Monitors the busy signal. When busy falls from 1 to 0, a conversion
-    -- has just completed. At that moment:
-    --   1. Latch rx_data_sig into ch_results for the channel just sampled
-    --   2. Increment ch_counter so the next conversion targets the next channel
-    --
-    -- After ch_counter reaches 7, it wraps back to 0, creating a continuous
-    -- 0->1->2->3->4->5->6->7->0->... cycle through all 8 channels.
-    ---------------------------------------------------------------------------
+    -- every clock edge, busy_prev records LAST cycle's busy value
+    -- when busy was 1, and now zero, conversion finished
+    -- then, result is latched, adn ch coutner advances to next channel
+    -- this is how we sample all 8 channels continuously
     process(CLOCK, RESETN)
 begin
     if RESETN = '0' then
@@ -181,12 +164,11 @@ begin
         busy_prev <= busy_sig;
 
         if busy_prev = '1' and busy_sig = '0' then
-            -- Store result directly into current ch_counter
-            -- ch_counter already points to the channel whose
-            -- data just came back
+            -- specifically, store result directly into current ch_counter
+            -- ch_counter already points to the channel whose data is coming back
             ch_results(ch_counter) <= rx_data_sig;
             
-            -- Advance to next channel
+            -- Then, we advance to next channel
             if ch_counter = 7 then
                 ch_counter <= 0;
             else
