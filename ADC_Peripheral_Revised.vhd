@@ -178,12 +178,10 @@ begin
     end if;
 end process;
 
-    ---------------------------------------------------------------------------
-    -- Channel Result Mux
-    --
-    -- Uses the low 3 bits of IO_ADDR to select which channel result to drive.
-    -- 0xC0 -> ch_results(0), 0xC1 -> ch_results(1), ..., 0xC7 -> ch_results(7)
-    ---------------------------------------------------------------------------
+    -- this is a concurrent select statement
+    -- low 3 bits of IO_ADDR directly indexed into ch results
+    -- essentially, depending on the channel you want, sends these bits
+    -- address starts with 000, then 001, 010, etc etc.
     with IO_ADDR(2 downto 0) select
         selected_result <=
             ch_results(0) when "000",
@@ -195,19 +193,13 @@ end process;
             ch_results(6) when "110",
             ch_results(7) when others;
 
-    ---------------------------------------------------------------------------
-    -- IO Bus Driver
-    --
-    -- Drives IO_DATA when SCOMP reads from any address 0xC0 through 0xC7.
-    -- IO_ADDR[10:3] = "00011000" identifies our peripheral (upper bits of 0xCx).
-    -- IO_ADDR[2:0]  selects the channel via the mux above.
-    -- lpm_bustri tri-states the bus when io_en='0' so other peripherals
-    -- can still drive IO_DATA.
-    ---------------------------------------------------------------------------
+    -- io_en is only high when SCOMP is doing an IN from our address range
+    --when we ARE doing in In, we drive the 12 bit result (padded to 16)
     io_en <= '1' when IO_READ = '1'
                   and IO_ADDR(10 downto 3) = "00011000"
              else '0';
 
+    -- else, we leave it disconnected (high impedance) so other peripherals can still use the bus
     io_bus : lpm_bustri
         generic map (lpm_width => 16)
         port map(
