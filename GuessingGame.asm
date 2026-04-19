@@ -1,15 +1,18 @@
-; PotGuess_Championship_Edition.asm
-; SW8: P1 Lock | SW7: P2 Lock | SW9: Master Start/Reset
-; ---------------------------------------------------------------
+; GuessingGame.asm
+; SW8: P1 Lock
+; SW7: P2 Lock
+; SW9: Start
+
 ORG 0
 
+; Reset Hex screens and LEDs
 Init:
     LOADI 0
     OUT Hex0
     OUT Hex1
     OUT LEDs
 
-; --- PHASE 1: Player 1 Sets Target ---
+; P1 sets P2 target
 WaitP1Set:
     IN CH0
     CALL ScaleTo99
@@ -26,7 +29,7 @@ WaitP1Release:
     LOADI 0
     OUT Hex1            
 
-; --- PHASE 2: Player 2 Sets Target ---
+; P2 sets P1 target
 WaitP2Set:
     IN CH7
     CALL ScaleTo99
@@ -43,17 +46,18 @@ WaitP2Release:
     LOADI 0
     OUT Hex0            
 
-; --- PHASE 3: Master Ready Check ---
+; Wait until Start switch is up
 WaitMasterStart:
     IN Switches
     AND Mask9
     JZERO WaitMasterStart 
 
-; --- PHASE 4: The Game Round ---
+; Reset timer
 StartTimer:
     LOADI 0
     OUT Timer
 
+; Game loop for P1 and P2 to guess their respective targets
 GameLoop:
     IN CH0
     CALL ScaleTo99
@@ -73,7 +77,7 @@ GameLoop:
     JPOS RoundOver
     JZERO RoundOver
 
-    ; LED Countdown Logic (Original)
+    ; LED countdown
     LOAD TimerVal
     SUB Const10
     JNEG LED5
@@ -88,6 +92,7 @@ GameLoop:
     JNEG LED2
     JUMP LED1
 
+; Helper subroutines to set LEDs
 LED5: LOADI &B011111
     OUT LEDs
     JUMP GameLoop
@@ -104,22 +109,24 @@ LED1: LOADI &B000001
     OUT LEDs
     JUMP GameLoop
 
-; --- PHASE 5: Evaluation ---
+; Evaluate numbers with targets
 RoundOver:
     LOADI 0
     OUT LEDs
-    
+
+	; Check P1 target with score
     LOAD P1Guess
     SUB P1Target
     CALL GetResultCode
     STORE P1Result
 
+	; Check P2 target with score
     LOAD P2Guess
     SUB P2Target
     CALL GetResultCode
     STORE P2Result
 
-    ; Show Standard Results first (A/b/0)
+    ; Show results
     LOAD P1Result
     CALL ShiftLeft      
     OUT Hex1
@@ -127,13 +134,13 @@ RoundOver:
     CALL ShiftLeft
     OUT Hex0
 
-    ; Check for Winner
+    ; Check for winner
     LOAD P1Result
     JZERO GameOver      
     LOAD P2Result
     JZERO GameOver      
 
-    ; TIE-BREAK COUNTDOWN
+    ; Tie-break countdown
     LOADI &B000111      
     OUT LEDs
     CALL Delay
@@ -145,28 +152,31 @@ RoundOver:
     CALL Delay
     JUMP StartTimer     
 
-; --- PHASE 6: Victory Display ---
+; Display which player won
+; '111111' for P1 win
+; '222222' for P2 win
 GameOver:
     ; Check if P1 won
     LOAD P1Result
     JNZ CheckP2Win
-    LOADI 17        ; 17 decimal = 0x11, shows "11"
+    LOADI 17        ; 17 decimal = 0x11
     OUT Hex1
 	LOADI 1
 	SHIFT 12
-	ADDI  273
+	ADDI  273		; 4369 decimal = 0x1111
 	OUT Hex0
 CheckP2Win:
     ; Check if P2 won
     LOAD P2Result
     JNZ WaitReset
-    LOADI 34        ; 34 decimal = 0x22, shows "22"
+    LOADI 34        ; 34 decimal = 0x22
     OUT Hex1
 	LOADI 34
 	SHIFT 8
-	ADDI 34
+	ADDI 34			; 8738 decimal = 0x2222
 	OUT Hex0
 
+; Wait to reset game
 WaitReset:
 	CALL FlashLeds
     IN Switches
@@ -178,8 +188,7 @@ WaitResetUp:
     JZERO WaitResetUp    
     JUMP Init
 
-; --- SUBROUTINES ---
-
+; Helper subroutines
 GetResultCode:
     JNEG IsLow
     JPOS IsHigh
@@ -271,7 +280,7 @@ FlashLeds:
     CALL FlashDelay
     RETURN
 
-; --- DATA ---
+; Variables
 P1Target:  DW 0
 P2Target:  DW 0
 P1Guess:   DW 0
@@ -285,6 +294,7 @@ PackTemp:  DW 0
 PackTens:  DW 0
 ShiftTemp: DW 0
 
+; Constants
 Const10:   DW 10
 Const20:   DW 20
 Const30:   DW 30
@@ -297,6 +307,7 @@ Mask9:     DW &B1000000000
 MaskLedsOn: DW &B101010101
 MaskLedsOff:     DW &B000000000
 
+; Peripherals
 CH0:       EQU &HC0
 CH7:       EQU &HC7
 Switches:  EQU 000
